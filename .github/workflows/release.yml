@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            label: linux-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: macos-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "env-lock-${{ github.event.release.tag_name }}-${{ matrix.label }}"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/env-lock.exe, README.md, LICENSE -Destination $name
+          Compress-Archive -Path "$name/*" -DestinationPath "$name.zip"
+          "ASSET=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Package (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name="env-lock-${{ github.event.release.tag_name }}-${{ matrix.label }}"
+          mkdir "$name"
+          cp target/${{ matrix.target }}/release/env-lock README.md LICENSE "$name"/
+          tar -czf "$name.tar.gz" "$name"
+          echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ASSET" --clobber
